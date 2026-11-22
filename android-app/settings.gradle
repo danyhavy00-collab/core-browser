@@ -1,0 +1,2 @@
+rootProject.name = "CORE-Browser"
+include ':app'
