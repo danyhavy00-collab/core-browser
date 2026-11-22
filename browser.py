@@ -27,7 +27,12 @@ def get_resource_path(filename: str) -> str:
 
 def get_app_dir() -> str:
     if getattr(sys, 'frozen', False):
-        return os.path.dirname(sys.executable)
+        exe_dir = os.path.dirname(sys.executable)
+        if os.access(exe_dir, os.W_OK):
+            return exe_dir
+        user_dir = os.path.join(os.path.expanduser("~"), ".core-browser")
+        os.makedirs(user_dir, exist_ok=True)
+        return user_dir
     return os.path.dirname(os.path.abspath(__file__))
 
 

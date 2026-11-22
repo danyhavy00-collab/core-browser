@@ -1,4 +1,4 @@
-name: Release CORE Browser v1.0 (All Platforms)
+name: Release CORE Browser (Installers + Portable)
 
 on:
   push:
@@ -18,17 +18,46 @@ jobs:
           python-version: '3.11'
       - name: Install dependencies
         run: |
-          sudo apt-get update && sudo apt-get install -y libxcb-cursor0 zip
+          sudo apt-get update && sudo apt-get install -y libxcb-cursor0 zip dpkg-dev
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      - name: Package Linux Portable
+      - name: Build Linux Binary & Portable Zip
         run: |
           pyinstaller --noconfirm --onedir --windowed --name "CORE-Browser-Linux" --icon "core_icon.png" --add-data "core_icon.png:." browser.py
           cd dist && zip -r ../CORE-Browser-Linux-Portable.zip CORE-Browser-Linux
+      - name: Build Linux .deb Installer
+        run: |
+          mkdir -p deb-pkg/DEBIAN deb-pkg/opt/core-browser deb-pkg/usr/bin deb-pkg/usr/share/applications deb-pkg/usr/share/icons/hicolor/256x256/apps
+          cp -r dist/CORE-Browser-Linux/* deb-pkg/opt/core-browser/
+          cp core_icon.png deb-pkg/usr/share/icons/hicolor/256x256/apps/core-browser.png
+          ln -s /opt/core-browser/CORE-Browser-Linux deb-pkg/usr/bin/core-browser
+          cat << 'CTL' > deb-pkg/DEBIAN/control
+          Package: core-browser
+          Version: 1.1.0
+          Section: web
+          Priority: optional
+          Architecture: amd64
+          Depends: libxcb-cursor0
+          Maintainer: CORE
+          Description: CORE Browser - Zero-Trace RAM Browser with AES-256 Vault
+          CTL
+          cat << 'DSK' > deb-pkg/usr/share/applications/core-browser.desktop
+          [Desktop Entry]
+          Name=CORE Browser
+          Comment=Zero-Trace RAM Browser with AES-256 Vault
+          Exec=/opt/core-browser/CORE-Browser-Linux
+          Icon=core-browser
+          Terminal=false
+          Type=Application
+          Categories=Network;WebBrowser;
+          DSK
+          dpkg-deb --build deb-pkg CORE-Browser-Linux.deb
       - uses: actions/upload-artifact@v4
         with:
           name: linux-release
-          path: CORE-Browser-Linux-Portable.zip
+          path: |
+            CORE-Browser-Linux-Portable.zip
+            CORE-Browser-Linux.deb
 
   build-windows:
     runs-on: windows-latest
@@ -41,14 +70,21 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      - name: Package Windows 11 Portable
+      - name: Build Windows Executable & Portable Zip
         run: |
           pyinstaller --noconfirm --onedir --windowed --name "CORE-Browser-Win11" --icon "core_icon.ico" --add-data "core_icon.png;." browser.py
           Compress-Archive -Path dist/CORE-Browser-Win11 -DestinationPath CORE-Browser-Win11-Portable.zip
+      - name: Build Windows 11 Setup Installer
+        run: |
+          choco install innosetup -y
+          iscc installer.iss
+          Move-Item dist\CORE-Browser-Win11-Setup.exe CORE-Browser-Win11-Setup.exe
       - uses: actions/upload-artifact@v4
         with:
           name: windows-release
-          path: CORE-Browser-Win11-Portable.zip
+          path: |
+            CORE-Browser-Win11-Portable.zip
+            CORE-Browser-Win11-Setup.exe
 
   build-android:
     runs-on: ubuntu-latest
@@ -86,17 +122,17 @@ jobs:
         with:
           name: "CORE Browser ${{ github.ref_name }}"
           body: |
-            ### CORE Browser — Cross-Platform Release
-            - **Windows 11 (`CORE-Browser-Win11-Portable.zip`):** Extract and run `CORE-Browser-Win11.exe` (No admin required).
-            - **Linux (`CORE-Browser-Linux-Portable.zip`):** Extract and run `./CORE-Browser-Linux` (No sudo required).
-            - **Android (`CORE-Browser-Android.apk`):** Sideload and install directly on Android 8.0+.
+            ### Installers
+            - **Windows 11 Installer (`CORE-Browser-Win11-Setup.exe`):** Full installation wizard with Start Menu & Desktop shortcuts (supports non-admin per-user install).
+            - **Linux Mint / Ubuntu Installer (`CORE-Browser-Linux.deb`):** Double-click to install via GDebi/Software Manager or run `sudo apt install ./CORE-Browser-Linux.deb`.
+            - **Android (`CORE-Browser-Android.apk`):** Sideload directly on Android 8.0+.
 
-            **Included Features:**
-            - Zero-trace RAM-only browsing session
-            - Local AES-256 encrypted vault (`core_vault.enc`)
-            - Automatic URL tracking parameter stripper
-            - Built-in HTML page source inspector
+            ### Portable (No-Install)
+            - **Windows 11 Portable (`CORE-Browser-Win11-Portable.zip`):** Extract and run `CORE-Browser-Win11.exe`.
+            - **Linux Portable (`CORE-Browser-Linux-Portable.zip`):** Extract and run `./CORE-Browser-Linux`.
           files: |
+            CORE-Browser-Win11-Setup.exe
             CORE-Browser-Win11-Portable.zip
+            CORE-Browser-Linux.deb
             CORE-Browser-Linux-Portable.zip
             CORE-Browser-Android.apk
