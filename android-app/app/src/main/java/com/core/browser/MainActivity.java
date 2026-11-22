@@ -281,7 +281,7 @@ public class MainActivity extends AppCompatActivity {
     private boolean unlockVault(String password) {
         try {
             File saltFile = new File(getFilesDir(), "core.salt");
-            byte[] salt = new byte[16];
+            byte[] salt = java.nio.ByteBuffer.allocate(16).array();
             if (saltFile.exists()) {
                 try (FileInputStream fis = new FileInputStream(saltFile)) { fis.read(salt); }
             } else {
@@ -317,7 +317,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void saveVaultText(String plain) {
         try {
-            byte[] iv = new byte[12];
+            byte[] iv = java.nio.ByteBuffer.allocate(12).array();
             new SecureRandom().nextBytes(iv);
             Cipher c = Cipher.getInstance("AES/GCM/NoPadding");
             c.init(Cipher.ENCRYPT_MODE, vaultKey, new GCMParameterSpec(128, iv));
