@@ -1,0 +1,102 @@
+name: Release CORE Browser v1.0 (All Platforms)
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y libxcb-cursor0 zip
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Package Linux Portable
+        run: |
+          pyinstaller --noconfirm --onedir --windowed --name "CORE-Browser-Linux" --icon "core_icon.png" --add-data "core_icon.png:." browser.py
+          cd dist && zip -r ../CORE-Browser-Linux-Portable.zip CORE-Browser-Linux
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-release
+          path: CORE-Browser-Linux-Portable.zip
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Package Windows 11 Portable
+        run: |
+          pyinstaller --noconfirm --onedir --windowed --name "CORE-Browser-Win11" --icon "core_icon.ico" --add-data "core_icon.png;." browser.py
+          Compress-Archive -Path dist/CORE-Browser-Win11 -DestinationPath CORE-Browser-Win11-Portable.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-release
+          path: CORE-Browser-Win11-Portable.zip
+
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+      - uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.5'
+      - name: Build Android APK
+        working-directory: android-app
+        run: gradle assembleDebug
+      - name: Rename APK
+        run: cp android-app/app/build/outputs/apk/debug/app-debug.apk CORE-Browser-Android.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-release
+          path: CORE-Browser-Android.apk
+
+  publish-release:
+    needs:
+      - build-linux
+      - build-windows
+      - build-android
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "CORE Browser ${{ github.ref_name }}"
+          body: |
+            ### CORE Browser — Cross-Platform Release
+            - **Windows 11 (`CORE-Browser-Win11-Portable.zip`):** Extract and run `CORE-Browser-Win11.exe` (No admin required).
+            - **Linux (`CORE-Browser-Linux-Portable.zip`):** Extract and run `./CORE-Browser-Linux` (No sudo required).
+            - **Android (`CORE-Browser-Android.apk`):** Sideload and install directly on Android 8.0+.
+
+            **Included Features:**
+            - Zero-trace RAM-only browsing session
+            - Local AES-256 encrypted vault (`core_vault.enc`)
+            - Automatic URL tracking parameter stripper
+            - Built-in HTML page source inspector
+          files: |
+            CORE-Browser-Win11-Portable.zip
+            CORE-Browser-Linux-Portable.zip
+            CORE-Browser-Android.apk
