@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   build-linux:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -29,6 +29,8 @@ jobs:
         run: |
           mkdir -p deb-pkg/DEBIAN deb-pkg/opt/core-browser deb-pkg/usr/bin deb-pkg/usr/share/applications deb-pkg/usr/share/icons/hicolor/256x256/apps
           cp -r dist/CORE-Browser-Linux/* deb-pkg/opt/core-browser/
+          chmod -R 755 deb-pkg/opt/core-browser
+          chmod +x deb-pkg/opt/core-browser/CORE-Browser-Linux
           cp core_icon.png deb-pkg/usr/share/icons/hicolor/256x256/apps/core-browser.png
           ln -s /opt/core-browser/CORE-Browser-Linux deb-pkg/usr/bin/core-browser
           cat << 'CTL' > deb-pkg/DEBIAN/control
@@ -46,6 +48,7 @@ jobs:
           Name=CORE Browser
           Comment=Zero-Trace RAM Browser with AES-256 Vault
           Exec=/opt/core-browser/CORE-Browser-Linux
+          Path=/opt/core-browser
           Icon=core-browser
           Terminal=false
           Type=Application
