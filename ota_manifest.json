@@ -1,0 +1,9 @@
+{
+  "ota_version": "v2.0",
+  "announcement": "Updated Core version with Core Desktop, Fixed Settings, and better tools.",
+  "code_modules": [
+    "core_ui.py",
+    "core_desktop.py",
+    "core_blocker.py"
+  ]
+}

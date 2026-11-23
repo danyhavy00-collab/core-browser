@@ -1,3 +1,13 @@
 core_admin.py
 core_settings.json
 core_vault.*
+*.deb
+*.zip
+dist/
+build/
+venv/
+*.deb
+*.zip
+dist/
+build/
+__pycache__/

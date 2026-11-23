@@ -1,29 +1,49 @@
 import sys
 import os
+
+
+def _init_ota_path():
+    ota_dir = os.path.join(os.path.expanduser("~"), ".core-browser", "ota")
+    os.makedirs(ota_dir, exist_ok=True)
+    if ota_dir not in sys.path:
+        sys.path.insert(0, ota_dir)
+    return ota_dir
+
+
+OTA_DIR = _init_ota_path()
+
 import json
 import base64
-from urllib.parse import urlparse, parse_qs, urlencode, urlunparse, quote_plus
+import urllib.request
+from urllib.parse import urlparse, parse_qs, urlencode, urlunparse, quote_plus, unquote
 
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
-from PyQt6.QtCore import QUrl, Qt, QSize
-from PyQt6.QtGui import QAction, QColor, QIcon, QPixmap, QPainter, QFont
+from PyQt6.QtCore import QUrl, Qt, QSize, QTimer
+from PyQt6.QtGui import QColor, QIcon, QPixmap, QPainter, QFont
 from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QTabWidget, QToolBar, QLineEdit,
+    QApplication, QMainWindow, QTabWidget, QLineEdit,
     QPushButton, QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
     QTextEdit, QLabel, QInputDialog, QMessageBox, QListWidget
 )
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage, QWebEngineScript
 
+from core_blocker import CoreRequestBlocker, AD_AND_TRACKER_DOMAINS
+from core_ui import (
+    THEMES, BROWSER_PROFILES, build_qt_stylesheet,
+    render_home_html, render_settings_html
+)
+from core_desktop import render_desktop_html
 
 
 def get_resource_path(filename: str) -> str:
     if hasattr(sys, "_MEIPASS"):
         return os.path.join(sys._MEIPASS, filename)
     return os.path.join(get_app_dir(), filename)
+
 
 def get_app_dir() -> str:
     if getattr(sys, 'frozen', False):
@@ -34,13 +54,6 @@ def get_app_dir() -> str:
         os.makedirs(user_dir, exist_ok=True)
         return user_dir
     return os.path.dirname(os.path.abspath(__file__))
-
-
-def build_core_search_url(query: str) -> str:
-    return (
-        f"https://duckduckgo.com{quote_plus(query)}"
-        "&kae=d&k1=-1&kak=-1&kax=-1&kaq=-1&kap=-1&kao=-1&kau=-1"
-    )
 
 
 class CryptoVault:
@@ -116,227 +129,36 @@ def clean_url(raw_url: str) -> str:
     ))
 
 
-APP_STYLESHEET = """
-QMainWindow {
-    background-color: #14171c;
-}
-QTabWidget::pane {
-    border: none;
-    background-color: #14171c;
-}
-QTabBar {
-    background-color: #0d0f12;
-    qproperty-drawBase: 0;
-}
-QTabBar::tab {
-    background-color: #0d0f12;
-    color: #8b949e;
-    padding: 8px 14px;
-    margin-top: 5px;
-    margin-left: 3px;
-    border-top-left-radius: 8px;
-    border-top-right-radius: 8px;
-    min-width: 130px;
-    max-width: 210px;
-    font-size: 12px;
-}
-QTabBar::tab:selected {
-    background-color: #1c2026;
-    color: #f0f6fc;
-}
-QTabBar::tab:hover:!selected {
-    background-color: #15181e;
-    color: #c9d1d9;
-}
-QPushButton#NewTabBtn {
-    background: transparent;
-    color: #8b949e;
-    border: none;
-    border-radius: 6px;
-    font-size: 16px;
-    font-weight: 600;
-    padding: 2px 9px;
-    margin: 5px 4px 2px 4px;
-}
-QPushButton#NewTabBtn:hover {
-    background-color: #1c2026;
-    color: #f0f6fc;
-}
-QWidget#NavBar {
-    background-color: #1c2026;
-    border-bottom: 1px solid #282d35;
-}
-QPushButton.NavBtn {
-    background: transparent;
-    color: #b1bac4;
-    border: none;
-    border-radius: 6px;
-    padding: 5px 8px;
-    font-size: 14px;
-}
-QPushButton.NavBtn:hover {
-    background-color: #282d35;
-    color: #ffffff;
-}
-QLineEdit#UrlBar {
-    background-color: #111317;
-    color: #e6edf3;
-    border: 1px solid #2b313a;
-    border-radius: 15px;
-    padding: 5px 14px;
-    font-size: 13px;
-}
-QLineEdit#UrlBar:focus {
-    border: 1px solid #4c8bf5;
-    background-color: #0d0f12;
-}
-QLabel#ShieldBadge {
-    color: #8b949e;
-    background-color: #14171c;
-    border: 1px solid #2b313a;
-    border-radius: 11px;
-    padding: 3px 10px;
-    font-size: 11px;
-    font-weight: 600;
-}
-QDockWidget {
-    color: #e6edf3;
-    font-weight: 600;
-}
-QDockWidget::title {
-    background-color: #1c2026;
-    padding: 9px;
-    border-bottom: 1px solid #282d35;
-}
-QWidget#DockBody {
-    background-color: #14171c;
-    color: #e6edf3;
-}
-QWidget#DockBody QLabel {
-    color: #e6edf3;
-    font-weight: 600;
-    margin-top: 4px;
-}
-QPushButton.DockBtn {
-    background-color: #21262d;
-    color: #e6edf3;
-    border: 1px solid #30363d;
-    border-radius: 6px;
-    padding: 6px 12px;
-    font-size: 12px;
-}
-QPushButton.DockBtn:hover {
-    background-color: #30363d;
-}
-QTextEdit, QListWidget {
-    background-color: #0d0f12;
-    color: #e6edf3;
-    border: 1px solid #282d35;
-    border-radius: 6px;
-    padding: 6px;
-}
-"""
-
-CORE_HOME_HTML = """<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>New Tab</title>
-<style>
-    * { box-sizing: border-box; }
-    body {
-        background-color: #14171c;
-        color: #e6edf3;
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-        margin: 0; display: flex; flex-direction: column; align-items: center;
-        justify-content: center; height: 86vh;
-    }
-    .wrap { width: 90%; max-width: 560px; text-align: center; }
-    .logo {
-        font-size: 38px; font-weight: 700; letter-spacing: 6px;
-        color: #f0f6fc; margin-bottom: 24px;
-    }
-    .search-box {
-        display: flex; align-items: center; background: #1c2026;
-        border: 1px solid #2d333b; border-radius: 24px; padding: 4px 8px 4px 18px;
-    }
-    .search-box:focus-within {
-        border-color: #4c8bf5; background: #181b20;
-    }
-    input[type="text"] {
-        flex: 1; padding: 10px 8px; border: none; background: transparent;
-        color: #f0f6fc; font-size: 15px; outline: none;
-    }
-    button {
-        padding: 8px 18px; border-radius: 18px; border: none; background: #2d333b;
-        color: #e6edf3; font-weight: 500; font-size: 13px; cursor: pointer;
-    }
-    button:hover { background: #3b424c; }
-    .shortcuts { margin-top: 26px; display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
-    .shortcuts a {
-        color: #8b949e; text-decoration: none; font-size: 12px;
-        padding: 6px 14px; background: #1c2026; border: 1px solid #282d35; border-radius: 16px;
-    }
-    .shortcuts a:hover { color: #f0f6fc; border-color: #444c56; }
-</style>
-</head>
-<body>
-    <div class="wrap">
-        <div class="logo">CORE</div>
-        <form class="search-box" action="https://duckduckgo.com" method="get">
-            <input type="hidden" name="kae" value="d">
-            <input type="hidden" name="k1" value="-1">
-            <input type="hidden" name="kak" value="-1">
-            <input type="hidden" name="kax" value="-1">
-            <input type="hidden" name="kaq" value="-1">
-            <input type="hidden" name="kap" value="-1">
-            <input type="hidden" name="kao" value="-1">
-            <input type="hidden" name="kau" value="-1">
-            <input type="text" name="q" placeholder="Search the web or type a URL" autofocus>
-            <button type="submit">Search</button>
-        </form>
-        <div class="shortcuts">
-            <a href="https://wikipedia.org">Wikipedia</a>
-            <a href="https://github.com">GitHub</a>
-            <a href="https://archive.org">Internet Archive</a>
-            <a href="https://ycombinator.com">Hacker News</a>
-        </div>
-    </div>
-</body>
-</html>"""
-
-CORE_SKIN_JS = """
+CORE_AD_AND_DDG_SCRUB_JS = """
 (function() {
-    const css = `
-        html, body, .site-wrapper, .header-wrap, #header_wrapper {
-            background-color: #14171c !important;
-        }
-        /* Hide only Duck.ai, Share Feedback, and footer promos */
-        a[href*="duck.ai"], [data-testid="duckai-button"], [aria-label*="Duck.ai" i],
-        button[aria-label*="feedback" i], [data-testid="feedback-prompt"],
-        .js-badge-link, .badge-link, .header--aside, .nav-menu--theme, .footer {
-            display: none !important;
-        }
-    `;
     const scrub = () => {
         if (!window.location.href.includes('duckduckgo.com')) return;
         const head = document.head || document.documentElement;
-        if (head && !document.getElementById('core-skin-css')) {
+        if (head && !document.getElementById('core-ddg-css')) {
             const s = document.createElement('style');
-            s.id = 'core-skin-css';
-            s.textContent = css;
+            s.id = 'core-ddg-css';
+            s.textContent = `
+                html, body, .site-wrapper, .header-wrap, #header_wrapper { background-color: #14171c !important; }
+                a[href*="duck.ai"], [data-testid="duckai-button"], [aria-label*="Duck.ai" i],
+                button[aria-label*="feedback" i], [data-testid="feedback-prompt"],
+                [data-testid="ad"], .result--ad, .results--ads, li[data-layout="ad"],
+                .js-badge-link, .badge-link, .header--aside, .nav-menu--theme, .footer {
+                    display: none !important;
+                }
+            `;
             head.appendChild(s);
         }
-        // Replace DuckDuckGo SVG/IMG logo inside the header link without hiding the header bar
         document.querySelectorAll('header a[href="/"], header a[href^="/?"], [data-testid="header-logo"]').forEach(link => {
             if (!link.dataset.coreSwapped) {
                 link.dataset.coreSwapped = '1';
-                link.removeAttribute('title');
-                link.removeAttribute('aria-label');
                 link.innerHTML = '<span style="color:#f0f6fc;font-weight:800;font-size:18px;letter-spacing:4px;font-family:sans-serif;padding:0 8px;">CORE</span>';
             }
         });
-        // Hide Ask Duck.ai & Share Feedback using exact leaf elements only
+        document.querySelectorAll('article, li').forEach(card => {
+            if (card.querySelector('a[href*="://duckduckgo.com"], span[data-testid="ad-badge"]')) {
+                card.style.setProperty('display', 'none', 'important');
+            }
+        });
         document.querySelectorAll('a, button, span').forEach(el => {
             if (el.children.length > 0) return;
             const txt = (el.textContent || '').trim();
@@ -350,13 +172,9 @@ CORE_SKIN_JS = """
         }
     };
     const start = () => {
-        if (!document.documentElement) {
-            requestAnimationFrame(start);
-            return;
-        }
+        if (!document.documentElement) { requestAnimationFrame(start); return; }
         scrub();
-        const observer = new MutationObserver(scrub);
-        observer.observe(document.documentElement, { childList: true, subtree: true });
+        new MutationObserver(scrub).observe(document.documentElement, { childList: true, subtree: true });
     };
     start();
 })();
@@ -367,21 +185,29 @@ class CoreBrowser(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("CORE")
+        self.resize(1280, 820)
         icon_file = get_resource_path("core_icon.png")
         if os.path.exists(icon_file):
             self.setWindowIcon(QIcon(icon_file))
-        self.resize(1280, 820)
-        self.setStyleSheet(APP_STYLESHEET)
+
+        self.settings_path = os.path.join(get_app_dir(), "core_settings.json")
+        self.settings = self._load_settings()
+        self.ota_path = os.path.join(get_app_dir(), "core_ota.json")
+        self.ota_info = self._load_ota()
 
         self.ram_profile = QWebEngineProfile()
         self.ram_profile.setHttpCacheType(QWebEngineProfile.HttpCacheType.MemoryHttpCache)
         self.ram_profile.setPersistentCookiesPolicy(
-            QWebEngineProfile.PersistentCookiesPolicy.NoPersistentCookies
+            QWebEngineProfile.PersistentCookiesPolicy.AllowPersistentCookies
         )
+
+        self.blocker = CoreRequestBlocker()
+        self.blocker.enabled = self.settings.get("blocker_enabled", True)
+        self.ram_profile.setUrlRequestInterceptor(self.blocker)
 
         script = QWebEngineScript()
         script.setName("CoreInstantSkin")
-        script.setSourceCode(CORE_SKIN_JS)
+        script.setSourceCode(CORE_AD_AND_DDG_SCRUB_JS)
         script.setInjectionPoint(QWebEngineScript.InjectionPoint.DocumentCreation)
         script.setWorldId(QWebEngineScript.ScriptWorldId.MainWorld)
         script.setRunsOnSubFrames(True)
@@ -433,9 +259,21 @@ class CoreBrowser(QMainWindow):
         self.url_bar.returnPressed.connect(self.navigate_to_url)
         nav_layout.addWidget(self.url_bar, 1)
 
-        shield = QLabel("RAM • AES-256")
-        shield.setObjectName("ShieldBadge")
-        nav_layout.addWidget(shield)
+        self.shield_badge = QLabel()
+        self.shield_badge.setObjectName("ShieldBadge")
+        nav_layout.addWidget(self.shield_badge)
+
+        desktop_btn = QPushButton("🖥")
+        desktop_btn.setProperty("class", "NavBtn")
+        desktop_btn.setToolTip("CORE OS Desktop (core://desktop)")
+        desktop_btn.clicked.connect(lambda: self.load_core_desktop(self.current_browser()))
+        nav_layout.addWidget(desktop_btn)
+
+        settings_btn = QPushButton("⚙")
+        settings_btn.setProperty("class", "NavBtn")
+        settings_btn.setToolTip("CORE Settings (core://settings)")
+        settings_btn.clicked.connect(lambda: self.load_core_settings(self.current_browser()))
+        nav_layout.addWidget(settings_btn)
 
         save_btn = QPushButton("☆")
         save_btn.setProperty("class", "NavBtn")
@@ -454,7 +292,72 @@ class CoreBrowser(QMainWindow):
         main_layout.addWidget(self.tabs, 1)
 
         self._init_tools_dock()
+        self._apply_settings_state()
         self.open_core_home()
+
+    def _load_settings(self) -> dict:
+        default = {
+            "theme": "Midnight Slate",
+            "engine": "Chromium",
+            "blocker_enabled": True,
+            "widgets": {"clock": True, "shield": True, "notes": True, "shortcuts": True}
+        }
+        if os.path.exists(self.settings_path):
+            try:
+                with open(self.settings_path, "r") as f:
+                    default.update(json.load(f))
+            except Exception:
+                pass
+        return default
+
+    def _save_settings(self):
+        with open(self.settings_path, "w") as f:
+            json.dump(self.settings, f, indent=2)
+
+    def _load_ota(self) -> dict:
+        if os.path.exists(self.ota_path):
+            try:
+                with open(self.ota_path, "r") as f:
+                    data = json.load(f)
+                AD_AND_TRACKER_DOMAINS.update(data.get("extra_block_domains", []))
+                return data
+            except Exception:
+                pass
+        return {"ota_version": "2.0.0", "announcement": "", "extra_themes": {}, "extra_block_domains": []}
+
+    def _sync_ota(self, browser: QWebEngineView):
+        base_raw = "https://githubusercontent.com"
+        try:
+            req = urllib.request.Request(base_raw + "ota_manifest.json", headers={"User-Agent": "CORE-Browser-OTA"})
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            for mod_name in data.get("code_modules", []):
+                m_req = urllib.request.Request(base_raw + mod_name, headers={"User-Agent": "CORE-Browser-OTA"})
+                with urllib.request.urlopen(m_req, timeout=8) as m_resp:
+                    with open(os.path.join(OTA_DIR, mod_name), "wb") as mf:
+                        mf.write(m_resp.read())
+            with open(self.ota_path, "w") as f:
+                json.dump(data, f, indent=2)
+            self.ota_info = self._load_ota()
+            self._apply_settings_state()
+            QMessageBox.information(self, "CORE Live Update", f"Synced v{self.ota_info.get('ota_version', '2.0')}! Restart CORE to activate new modules.")
+        except Exception as e:
+            QMessageBox.warning(self, "OTA Sync", f"Update check failed or offline:\n{e}")
+        self.load_core_settings(browser)
+
+    def _apply_settings_state(self):
+        self.setStyleSheet(build_qt_stylesheet(self.settings.get("theme", "Midnight Slate"), self.ota_info.get("extra_themes", {})))
+        engine = self.settings.get("engine", "Chromium")
+        profile = BROWSER_PROFILES.get(engine, BROWSER_PROFILES["Chromium"])
+        base_ua = QWebEngineProfile.defaultProfile().httpUserAgent()
+        if engine in ("Firefox", "Internet Explorer"):
+            self.ram_profile.setHttpUserAgent(profile["ua"])
+        elif profile["ua"]:
+            self.ram_profile.setHttpUserAgent(base_ua + " " + profile["ua"])
+        else:
+            self.ram_profile.setHttpUserAgent(base_ua)
+        self.blocker.enabled = self.settings.get("blocker_enabled", True)
+        self.shield_badge.setText(f"{engine} • Shield {'ON' if self.blocker.enabled else 'OFF'}")
 
     def _init_tools_dock(self):
         self.dock = QDockWidget("CORE Vault & Inspector", self)
@@ -508,16 +411,77 @@ class CoreBrowser(QMainWindow):
         self.load_core_home(browser)
 
     def load_core_home(self, browser: QWebEngineView):
-        browser.setHtml(CORE_HOME_HTML, QUrl("about:blank"))
+        browser.setProperty("core_page", "home")
+        browser.setHtml(render_home_html(self.settings, self.blocker.blocked_count, self.ota_info), QUrl("about:blank"))
         self.url_bar.setText("core://home")
         idx = self.tabs.indexOf(browser)
         if idx != -1:
+            self.tabs.setTabText(idx, "New Tab")
             self.tabs.setTabIcon(idx, self._core_tab_icon())
+
+    def load_core_settings(self, browser: QWebEngineView):
+        browser.setProperty("core_page", "settings")
+        browser.setHtml(render_settings_html(self.settings, self.blocker.blocked_count, self.ota_info), QUrl("about:blank"))
+        self.url_bar.setText("core://settings")
+        idx = self.tabs.indexOf(browser)
+        if idx != -1:
+            self.tabs.setTabText(idx, "Settings")
+            self.tabs.setTabIcon(idx, self._core_tab_icon())
+
+    def load_core_desktop(self, browser: QWebEngineView):
+        browser.setProperty("core_page", "desktop")
+        browser.setHtml(render_desktop_html(self.settings, self.blocker.blocked_count), QUrl("about:blank"))
+        self.url_bar.setText("core://desktop")
+        idx = self.tabs.indexOf(browser)
+        if idx != -1:
+            self.tabs.setTabText(idx, "CORE Desktop")
+            self.tabs.setTabIcon(idx, self._core_tab_icon())
+
+    def _search_url_for_query(self, query: str) -> str:
+        engine = self.settings.get("engine", "Chromium")
+        template = BROWSER_PROFILES.get(engine, BROWSER_PROFILES["Chromium"])["search_url"]
+        return template + quote_plus(query)
 
     def add_new_tab(self, qurl: QUrl = None, label="New Tab") -> QWebEngineView:
         browser = QWebEngineView()
-        page = QWebEnginePage(self.ram_profile, browser)
-        page.setBackgroundColor(QColor("#14171c"))
+        owner = self
+
+        class CorePage(QWebEnginePage):
+            def acceptNavigationRequest(self, url, nav_type, is_main_frame):
+                u = url.toString()
+                if u == "core://home":
+                    QTimer.singleShot(0, lambda: owner.load_core_home(browser))
+                    return False
+                if u == "core://settings":
+                    QTimer.singleShot(0, lambda: owner.load_core_settings(browser))
+                    return False
+                if u == "core://desktop":
+                    QTimer.singleShot(0, lambda: owner.load_core_desktop(browser))
+                    return False
+                if u.startswith("core-engine:"):
+                    eng = unquote(u.split("core-engine:", 1).pop())
+                    if eng in BROWSER_PROFILES:
+                        owner.settings["engine"] = eng
+                        owner._save_settings()
+                        owner._apply_settings_state()
+                    QTimer.singleShot(0, lambda: owner.load_core_home(browser))
+                    return False
+                if u.startswith("core-save:"):
+                    raw = unquote(u.split("core-save:", 1).pop())
+                    owner.settings.update(json.loads(raw))
+                    owner._save_settings()
+                    owner._apply_settings_state()
+                    QTimer.singleShot(0, lambda: owner.load_core_home(browser))
+                    return False
+                if u == "core-ota:sync":
+                    QTimer.singleShot(0, lambda: owner._sync_ota(browser))
+                    return False
+                return super().acceptNavigationRequest(url, nav_type, is_main_frame)
+
+        page = CorePage(self.ram_profile, browser)
+        all_themes = {**THEMES, **self.ota_info.get("extra_themes", {})}
+        bg = all_themes.get(self.settings.get("theme", "Midnight Slate"), THEMES["Midnight Slate"])["bg"]
+        page.setBackgroundColor(QColor(bg))
         browser.setPage(page)
 
         idx = self.tabs.addTab(browser, label)
@@ -528,6 +492,7 @@ class CoreBrowser(QMainWindow):
         browser.iconChanged.connect(lambda icon, b=browser: self._on_icon_changed(icon, b))
 
         if qurl:
+            browser.setProperty("core_page", "web")
             browser.setUrl(qurl)
         return browser
 
@@ -536,7 +501,9 @@ class CoreBrowser(QMainWindow):
         pix.fill(Qt.GlobalColor.transparent)
         p = QPainter(pix)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.setBrush(QColor("#2563eb"))
+        all_themes = {**THEMES, **self.ota_info.get("extra_themes", {})}
+        accent = all_themes.get(self.settings.get("theme", "Midnight Slate"), THEMES["Midnight Slate"])["accent"]
+        p.setBrush(QColor(accent))
         p.setPen(Qt.PenStyle.NoPen)
         p.drawRoundedRect(2, 2, 20, 20, 6, 6)
         p.setPen(QColor("#ffffff"))
@@ -580,18 +547,25 @@ class CoreBrowser(QMainWindow):
         if not text or text == "core://home":
             self.load_core_home(self.current_browser())
             return
-        if text.startswith("core://search?q="):
-            q = text.split("core://search?q=", 1).pop()
-            self.current_browser().setUrl(QUrl(build_core_search_url(q)))
+        if text == "core://settings":
+            self.load_core_settings(self.current_browser())
             return
+        if text == "core://desktop":
+            self.load_core_desktop(self.current_browser())
+            return
+        self.current_browser().setProperty("core_page", "web")
         if " " in text or ("." not in text and not text.startswith("localhost")):
-            self.current_browser().setUrl(QUrl(build_core_search_url(text)))
+            self.current_browser().setUrl(QUrl(self._search_url_for_query(text)))
             return
-        cleaned = clean_url(text)
-        self.current_browser().setUrl(QUrl(cleaned))
+        self.current_browser().setUrl(QUrl(clean_url(text)))
 
-    def _format_display_url(self, url_str: str) -> str:
+    def _format_display_url(self, browser: QWebEngineView, url_str: str) -> str:
         if url_str in ("about:blank", ""):
+            page_type = browser.property("core_page")
+            if page_type == "settings":
+                return "core://settings"
+            if page_type == "desktop":
+                return "core://desktop"
             return "core://home"
         if "duckduckgo.com" in url_str and "q=" in url_str:
             q = next(iter(parse_qs(urlparse(url_str).query).get("q", [""])), "")
@@ -600,7 +574,7 @@ class CoreBrowser(QMainWindow):
 
     def _on_url_changed(self, qurl: QUrl, browser: QWebEngineView):
         if browser == self.current_browser():
-            self.url_bar.setText(self._format_display_url(qurl.toString()))
+            self.url_bar.setText(self._format_display_url(browser, qurl.toString()))
 
     def _on_load_finished(self, ok: bool, browser: QWebEngineView):
         idx = self.tabs.indexOf(browser)
@@ -608,26 +582,29 @@ class CoreBrowser(QMainWindow):
         if idx == -1:
             return
         if url_str in ("about:blank", ""):
-            self.tabs.setTabText(idx, "New Tab")
+            page_type = browser.property("core_page")
+            if page_type == "settings":
+                self.tabs.setTabText(idx, "Settings")
+            elif page_type == "desktop":
+                self.tabs.setTabText(idx, "CORE Desktop")
+            else:
+                self.tabs.setTabText(idx, "New Tab")
         else:
             title = (browser.page().title() or "Tab").replace("at DuckDuckGo", "- CORE").replace("DuckDuckGo", "CORE")
             self.tabs.setTabText(idx, title[:22])
         if browser == self.current_browser():
-            self.url_bar.setText(self._format_display_url(url_str))
+            self.url_bar.setText(self._format_display_url(browser, url_str))
 
     def update_url_bar(self):
         browser = self.current_browser()
         if browser:
-            self.url_bar.setText(self._format_display_url(browser.url().toString()))
+            self.url_bar.setText(self._format_display_url(browser, browser.url().toString()))
 
     def toggle_tools_dock(self):
         self.dock.setVisible(not self.dock.isVisible())
 
     def unlock_vault(self):
-        pwd, ok = QInputDialog.getText(
-            self, "CORE Vault", "Enter Master Password:",
-            QLineEdit.EchoMode.Password
-        )
+        pwd, ok = QInputDialog.getText(self, "CORE Vault", "Enter Master Password:", QLineEdit.EchoMode.Password)
         if ok and pwd:
             if self.vault.unlock(pwd):
                 data = self.vault.load_data()
