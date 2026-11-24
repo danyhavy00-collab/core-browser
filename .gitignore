@@ -11,3 +11,10 @@ venv/
 dist/
 build/
 __pycache__/
+deb-local/
+dist/
+build/
+venv/
+*.deb
+*.zip
+__pycache__/

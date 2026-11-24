@@ -187,6 +187,23 @@ button.sec{{background:{t['bar']};color:{t['text']};border:1px solid {t['border'
 <div class="row"><span>Active Browser Profile</span><select id="engSel">{engine_opts}</select></div></div>
 <div class="card"><h2>Built-In Ad &amp; Tracker Blocker ({blocked_count} Blocked)</h2>
 <label><input type="checkbox" id="blkChk" {"checked" if blocker_on else ""}> Enable Network-Level Ad &amp; Tracker Blocking</label></div>
+<div class="card"><h2>Encrypted Routing &amp; VPN / Proxy Gateway</h2>
+<div class="row"><span>Network Routing Mode</span>
+<select id="pxMode">
+  <option value="direct" {"selected" if settings.get("proxy_mode","direct")=="direct" else ""}>Direct + Encrypted DNS (DoH)</option>
+  <option value="auto" {"selected" if settings.get("proxy_mode")=="auto" else ""}>Auto-Connect Free VPN Relay (1-Click)</option>
+  <option value="tor" {"selected" if settings.get("proxy_mode")=="tor" else ""}>Tor SOCKS5 Proxy (127.0.0.1:9050)</option>
+  <option value="socks5" {"selected" if settings.get("proxy_mode")=="socks5" else ""}>Custom SOCKS5 Proxy (VPN)</option>
+  <option value="http" {"selected" if settings.get("proxy_mode")=="http" else ""}>Custom HTTP/HTTPS Proxy</option>
+</select></div>
+<div class="row" style="gap:8px;">
+  <input id="pxHost" value="{html.escape(str(settings.get("proxy_host","")))}" placeholder="Proxy Host / IP (e.g. us-tx.socks.mullvad.net)" style="flex:2;background:{t['input']};color:{t['text']};border:1px solid {t['border']};border-radius:8px;padding:7px 10px;font-size:12px;">
+  <input id="pxPort" value="{html.escape(str(settings.get("proxy_port","")))}" placeholder="Port (1080)" style="flex:1;background:{t['input']};color:{t['text']};border:1px solid {t['border']};border-radius:8px;padding:7px 10px;font-size:12px;">
+</div>
+<div class="row" style="gap:8px;margin-bottom:0;">
+  <input id="pxUser" value="{html.escape(str(settings.get("proxy_user","")))}" placeholder="Username (optional)" style="flex:1;background:{t['input']};color:{t['text']};border:1px solid {t['border']};border-radius:8px;padding:7px 10px;font-size:12px;">
+  <input id="pxPass" type="password" value="{html.escape(str(settings.get("proxy_pass","")))}" placeholder="Password (optional)" style="flex:1;background:{t['input']};color:{t['text']};border:1px solid {t['border']};border-radius:8px;padding:7px 10px;font-size:12px;">
+</div></div>
 <div class="card"><h2>Home Page Widgets</h2>
 <label><input type="checkbox" id="wClock" {"checked" if widgets.get("clock", True) else ""}> Live Clock &amp; Date Widget</label>
 <label><input type="checkbox" id="wShield" {"checked" if widgets.get("shield", True) else ""}> Ad-Blocker Shield Stats Widget</label>
@@ -203,6 +220,11 @@ function saveAll(){{
     theme: document.getElementById('themeSel').value,
     engine: document.getElementById('engSel').value,
     blocker_enabled: document.getElementById('blkChk').checked,
+    proxy_mode: document.getElementById('pxMode').value,
+    proxy_host: document.getElementById('pxHost').value,
+    proxy_port: document.getElementById('pxPort').value,
+    proxy_user: document.getElementById('pxUser').value,
+    proxy_pass: document.getElementById('pxPass').value,
     widgets: {{
       clock: document.getElementById('wClock').checked,
       shield: document.getElementById('wShield').checked,

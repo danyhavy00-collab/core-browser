@@ -1,5 +1,6 @@
 import sys
 import os
+import shutil
 
 
 def _init_ota_path():
@@ -13,6 +14,7 @@ def _init_ota_path():
 OTA_DIR = _init_ota_path()
 
 import json
+import threading
 import base64
 import urllib.request
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse, quote_plus, unquote
@@ -21,22 +23,24 @@ from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
-from PyQt6.QtCore import QUrl, Qt, QSize, QTimer
+from PyQt6.QtCore import QUrl, Qt, QSize, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QIcon, QPixmap, QPainter, QFont
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QTabWidget, QLineEdit,
     QPushButton, QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
-    QTextEdit, QLabel, QInputDialog, QMessageBox, QListWidget
+    QTextEdit, QLabel, QInputDialog, QMessageBox, QListWidget, QFileDialog
 )
 from PyQt6.QtWebEngineWidgets import QWebEngineView
-from PyQt6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage, QWebEngineScript
+from PyQt6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage, QWebEngineScript, QWebEngineSettings
 
 from core_blocker import CoreRequestBlocker, AD_AND_TRACKER_DOMAINS
+from core_proxy import apply_network_proxy
 from core_ui import (
     THEMES, BROWSER_PROFILES, build_qt_stylesheet,
     render_home_html, render_settings_html
 )
 from core_desktop import render_desktop_html
+from core_store import search_live_apps, install_package_to_sandbox, import_into_sandbox, launch_sandboxed_app, wipe_sandbox_app
 
 
 def get_resource_path(filename: str) -> str:
@@ -182,8 +186,12 @@ CORE_AD_AND_DDG_SCRUB_JS = """
 
 
 class CoreBrowser(QMainWindow):
+    js_ready = pyqtSignal(object, str)
+    install_done = pyqtSignal(object, bool, str)
     def __init__(self):
         super().__init__()
+        self.js_ready.connect(lambda page, code: page.runJavaScript(code))
+        self.install_done.connect(self._on_install_done)
         self.setWindowTitle("CORE")
         self.resize(1280, 820)
         icon_file = get_resource_path("core_icon.png")
@@ -195,11 +203,22 @@ class CoreBrowser(QMainWindow):
         self.ota_path = os.path.join(get_app_dir(), "core_ota.json")
         self.ota_info = self._load_ota()
 
-        self.ram_profile = QWebEngineProfile()
-        self.ram_profile.setHttpCacheType(QWebEngineProfile.HttpCacheType.MemoryHttpCache)
+        self.session_dir = os.path.join(get_app_dir(), "active_session")
+        shutil.rmtree(self.session_dir, ignore_errors=True)
+        os.makedirs(self.session_dir, exist_ok=True)
+        self.ram_profile = QWebEngineProfile("CoreEphemeralSession", self)
+        self.ram_profile.setCachePath(os.path.join(self.session_dir, "cache"))
+        self.ram_profile.setPersistentStoragePath(os.path.join(self.session_dir, "storage"))
+        self.ram_profile.setHttpCacheType(QWebEngineProfile.HttpCacheType.DiskHttpCache)
         self.ram_profile.setPersistentCookiesPolicy(
             QWebEngineProfile.PersistentCookiesPolicy.AllowPersistentCookies
         )
+        ws = self.ram_profile.settings()
+        ws.setAttribute(QWebEngineSettings.WebAttribute.LocalStorageEnabled, True)
+        ws.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
+        ws.setAttribute(QWebEngineSettings.WebAttribute.JavascriptCanAccessClipboard, True)
+        ws.setAttribute(QWebEngineSettings.WebAttribute.WebGLEnabled, True)
+        ws.setAttribute(QWebEngineSettings.WebAttribute.FullScreenSupportEnabled, True)
 
         self.blocker = CoreRequestBlocker()
         self.blocker.enabled = self.settings.get("blocker_enabled", True)
@@ -295,6 +314,13 @@ class CoreBrowser(QMainWindow):
         self._apply_settings_state()
         self.open_core_home()
 
+    def _on_install_done(self, browser, ok: bool, msg: str):
+        if ok:
+            QMessageBox.information(self, "Installed to Sandbox", msg)
+        else:
+            QMessageBox.warning(self, "Package Unavailable", msg)
+        self.load_core_desktop(browser)
+
     def _load_settings(self) -> dict:
         default = {
             "theme": "Midnight Slate",
@@ -357,7 +383,8 @@ class CoreBrowser(QMainWindow):
         else:
             self.ram_profile.setHttpUserAgent(base_ua)
         self.blocker.enabled = self.settings.get("blocker_enabled", True)
-        self.shield_badge.setText(f"{engine} • Shield {'ON' if self.blocker.enabled else 'OFF'}")
+        proxy_label = apply_network_proxy(self.settings)
+        self.shield_badge.setText(f"{engine} • {proxy_label}")
 
     def _init_tools_dock(self):
         self.dock = QDockWidget("CORE Vault & Inspector", self)
@@ -473,8 +500,106 @@ class CoreBrowser(QMainWindow):
                     owner._apply_settings_state()
                     QTimer.singleShot(0, lambda: owner.load_core_home(browser))
                     return False
+                if u.startswith("core-store-search:"):
+                    raw = unquote(u.split("core-store-search:", 1).pop())
+                    grid_id, query = raw.split("|", 1)
+                    def _bg_search():
+                        items = search_live_apps(query)
+                        js = f"renderStoreResults({json.dumps(grid_id)}, {json.dumps(items)});"
+                        owner.js_ready.emit(browser.page(), js)
+                    threading.Thread(target=_bg_search, daemon=True).start()
+                    return False
+                if u.startswith("core-store-install:"):
+                    raw = unquote(u.split("core-store-install:", 1).pop())
+                    card_id, kind, target, app_name = raw.split("|", 3)
+                    def _bg_install():
+                        def _on_prog(pct, label):
+                            js = f"updateInstallProgress({json.dumps(card_id)}, {pct}, {json.dumps(label)});"
+                            owner.js_ready.emit(browser.page(), js)
+                        ok, msg = install_package_to_sandbox(kind, target, app_name, progress_cb=_on_prog)
+                        owner.install_done.emit(browser, ok, msg)
+                    threading.Thread(target=_bg_install, daemon=True).start()
+                    return False
+                if u.startswith("core-desk-browser:"):
+                    start_url = unquote(u.split("core-desk-browser:", 1).pop())
+                    def _open_desk_browser():
+                        win = QMainWindow(owner)
+                        win.setWindowTitle("CORE Desktop • Web Browser")
+                        win.resize(980, 650)
+                        box = QWidget()
+                        lay = QVBoxLayout(box)
+                        lay.setContentsMargins(0, 0, 0, 0)
+                        lay.setSpacing(0)
+                        bar = QHBoxLayout()
+                        bar.setContentsMargins(6, 6, 6, 6)
+                        view = QWebEngineView()
+                        view.setPage(QWebEnginePage(owner.ram_profile, view))
+                        addr = QLineEdit(start_url)
+                        addr.setStyleSheet("padding:5px 10px;border-radius:12px;background:#111317;color:#f0f6fc;border:1px solid #282d35;")
+                        def _go():
+                            t = addr.text().strip()
+                            if not t: return
+                            if " " in t or "." not in t:
+                                view.setUrl(QUrl(owner._search_url_for_query(t)))
+                            else:
+                                view.setUrl(QUrl(clean_url(t)))
+                        addr.returnPressed.connect(_go)
+                        view.urlChanged.connect(lambda q: addr.setText(q.toString()))
+                        for sym, fn in [("←", view.back), ("→", view.forward), ("↻", view.reload)]:
+                            bt = QPushButton(sym)
+                            bt.setStyleSheet("padding:4px 9px;background:#1c2026;color:#f0f6fc;border:none;border-radius:6px;")
+                            bt.clicked.connect(fn)
+                            bar.addWidget(bt)
+                        bar.addWidget(addr, 1)
+                        lay.addLayout(bar)
+                        lay.addWidget(view, 1)
+                        win.setCentralWidget(box)
+                        view.setUrl(QUrl(start_url))
+                        win.show()
+                        if not hasattr(owner, "_vm_windows"):
+                            owner._vm_windows = []
+                        owner._vm_windows.append(win)
+                    QTimer.singleShot(0, _open_desk_browser)
+                    return False
+                if u.startswith("core-cloud:"):
+                    raw = unquote(u.split("core-cloud:", 1).pop())
+                    title, target_url = raw.split("|", 1)
+                    def _open_cloud_win():
+                        win = QMainWindow(owner)
+                        win.setWindowTitle(f"CORE VM • {title} (Isolated Session)")
+                        win.resize(1024, 680)
+                        view = QWebEngineView()
+                        view.setPage(QWebEnginePage(owner.ram_profile, view))
+                        view.setUrl(QUrl(target_url))
+                        win.setCentralWidget(view)
+                        win.show()
+                        if not hasattr(owner, "_vm_windows"):
+                            owner._vm_windows = []
+                        owner._vm_windows.append(win)
+                    QTimer.singleShot(0, _open_cloud_win)
+                    return False
                 if u == "core-ota:sync":
                     QTimer.singleShot(0, lambda: owner._sync_ota(browser))
+                    return False
+                if u == "core-sb-import:pick":
+                    def _pick():
+                        path, _ = QFileDialog.getOpenFileName(owner, "Select Portable Game (.exe, AppImage, Binary)")
+                        if path:
+                            entry = import_into_sandbox(path)
+                            QMessageBox.information(owner, "Mounted to Sandbox", f"{entry['name']} mounted into isolated sandbox!")
+                            owner.load_core_desktop(browser)
+                    QTimer.singleShot(0, _pick)
+                    return False
+                if u.startswith("core-sb-run:"):
+                    aid = unquote(u.split("core-sb-run:", 1).pop())
+                    QTimer.singleShot(0, lambda: launch_sandboxed_app(aid))
+                    return False
+                if u.startswith("core-sb-wipe:"):
+                    aid = unquote(u.split("core-sb-wipe:", 1).pop())
+                    def _wipe():
+                        wipe_sandbox_app(aid)
+                        owner.load_core_desktop(browser)
+                    QTimer.singleShot(0, _wipe)
                     return False
                 return super().acceptNavigationRequest(url, nav_type, is_main_frame)
 
@@ -537,6 +662,8 @@ class CoreBrowser(QMainWindow):
             if w:
                 w.page().deleteLater()
                 w.deleteLater()
+        self.ram_profile.deleteLater()
+        shutil.rmtree(self.session_dir, ignore_errors=True)
         super().closeEvent(event)
 
     def current_browser(self) -> QWebEngineView:
@@ -640,7 +767,12 @@ class CoreBrowser(QMainWindow):
 
 
 if __name__ == "__main__":
-    sys.argv.append("--no-sandbox")
+    os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = (
+        "--no-sandbox "
+        "--dns-over-https-mode=secure "
+        "--dns-over-https-templates=https://cloudflare-dns.com "
+        "--enable-features=EncryptedClientHello,DnsOverHttps"
+    )
     app = QApplication(sys.argv)
     window = CoreBrowser()
     window.show()
